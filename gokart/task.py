@@ -64,6 +64,7 @@ class TaskOnKart(luigi.Task):
         default=False,
         description='True for failing the task immediately when the cache is locked, instead of waiting for the lock to be released',
         significant=False)
+    task_lock_exception_retry_counts: int = luigi.IntParameter(default=2, significant=False)
     fail_on_empty_dump: bool = ExplicitBoolParameter(default=False, description='Fail when task dumps empty DF', significant=False)
     store_index_in_feather: bool = ExplicitBoolParameter(default=True,
                                                          description='Wether to store index when using feather as a output object.',

@@ -1,6 +1,8 @@
+from functools import partial
 import logging
 from logging import getLogger
 from typing import Any, Optional
+import backoff
 
 import luigi
 
@@ -49,7 +51,15 @@ def _reset_register(keep={'gokart', 'luigi'}):
     ]
 
 
-def build(task: TaskOnKart, return_value: bool = True, reset_register: bool = True, log_level: int = logging.ERROR, **env_params) -> Optional[Any]:
+def build(
+    task: TaskOnKart,
+    return_value: bool = True,
+    reset_register: bool = True,
+    log_level: int = logging.ERROR,
+    task_lock_exception_max_tries: int = 10,
+    task_lock_exception_max_wait_seconds: int = 600,
+    **env_params,
+) -> Optional[Any]:
     """
     Run gokart task for local interpreter.
     Sharing the most of its parameters with luigi.build (see https://luigi.readthedocs.io/en/stable/api/luigi.html?highlight=build#luigi.build)
@@ -57,7 +67,23 @@ def build(task: TaskOnKart, return_value: bool = True, reset_register: bool = Tr
     if reset_register:
         _reset_register()
     with LoggerConfig(level=log_level):
-        result = luigi.build([task], local_scheduler=True, detailed_summary=True, log_level=logging.getLevelName(log_level), **env_params)
-        if result.status == luigi.LuigiStatusCode.FAILED:
-            raise GokartBuildError(result.summary_text)
-    return _get_output(task) if return_value else None
+        task_lock_exception_raised = TaskLockExceptionRaisedFlag()
+
+        @TaskOnKart.event_handler(luigi.Event.FAILURE)
+        def when_failure(task, exception):
+            if isinstance(exception, TaskLockException):
+                task_lock_exception_raised.flag = True
+
+        @backoff.on_exception(
+            partial(backoff.expo, max_value=task_lock_exception_max_wait_seconds), HasLockedTaskException, max_tries=task_lock_exception_max_tries
+        )
+        def _build_task():
+            task_lock_exception_raised.flag = False
+            result = luigi.build([task], local_scheduler=True, detailed_summary=True, log_level=logging.getLevelName(log_level), **env_params)
+            if task_lock_exception_raised.flag:
+                raise HasLockedTaskException()
+            if result.status == luigi.LuigiStatusCode.FAILED:
+                raise GokartBuildError(result.summary_text)
+            return _get_output(task) if return_value else None
+
+        return _build_task()

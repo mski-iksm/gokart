@@ -96,14 +96,6 @@ def _wrap_with_lock(func, redis_params: RedisParams):
     return wrapper
 
 
-def wrap_with_run_lock(func: Callable, redis_params: RedisParams):
-    """Redis lock wrapper function for RunWithLock.
-    When a fucntion is wrapped by RunWithLock, the wrapped function will be simply wrapped with redis lock.
-    https://github.com/m3dev/gokart/issues/265
-    """
-    return _wrap_with_lock(func=func, redis_params=redis_params)
-
-
 def wrap_with_dump_lock(func: Callable, redis_params: RedisParams, exist_check: Callable):
     """Redis lock wrapper function for TargetOnKart.dump().
     When TargetOnKart.dump() is called, dump() will be wrapped with redis lock and cache existance check.
@@ -188,3 +180,20 @@ def make_redis_params(
         lock_extend_seconds=lock_extend_seconds,
     )
     return redis_params
+
+
+def make_redis_params_for_run(task_self, lock_extend_seconds: int = 10) -> RedisParams:
+    task_path_name = os.path.join(task_self.__module__.replace('.', '/'), f'{type(task_self).__name__}')
+    unique_id = task_self.make_unique_id() + '-run'
+    redis_key = make_redis_key(file_path=task_path_name, unique_id=unique_id)
+
+    should_redis_lock = task_self.redis_host is not None and task_self.redis_port is not None
+    return RedisParams(
+        redis_host=task_self.redis_host,
+        redis_port=task_self.redis_port,
+        redis_key=redis_key,
+        should_redis_lock=should_redis_lock,
+        redis_timeout=task_self.redis_timeout,
+        raise_task_lock_exception_on_collision=True,
+        lock_extend_seconds=lock_extend_seconds,
+    )

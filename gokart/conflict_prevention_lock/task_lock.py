@@ -8,6 +8,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 logger = getLogger(__name__)
 
+# deprecated; task lock will be implemented to worker.py instead of each tasks
+
 
 class TaskLockParams(NamedTuple):
     redis_host: Optional[str]

@@ -62,6 +62,8 @@ from luigi.task_register import TaskClassException, load_task
 from luigi.task_status import RUNNING
 
 from gokart.parameter import ExplicitBoolParameter
+from gokart.task_collision_lock.dependency_lock import check_dependency_lock
+from gokart.task_collision_lock.run_lock import run_with_lock
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +129,9 @@ class TaskProcess(multiprocessing.Process):
         check_complete_on_run: bool = False,
         task_completion_cache: Optional[Dict[str, Any]] = None,
         task_completion_check_at_run: bool = True,
+        collision_lock_at_run: bool = False,
+        collision_lock_redis_host: str | None = None,
+        collision_lock_redis_port: int | None = None,
     ) -> None:
         super(TaskProcess, self).__init__()
         self.task = task
@@ -141,6 +146,10 @@ class TaskProcess(multiprocessing.Process):
         self.task_completion_cache = task_completion_cache
         self.task_completion_check_at_run = task_completion_check_at_run
 
+        self.collision_lock_at_run = collision_lock_at_run
+        self.collision_lock_redis_host = collision_lock_redis_host
+        self.collision_lock_redis_port = collision_lock_redis_port
+
         # completeness check using the cache
         self.check_complete = functools.partial(luigi.worker.check_complete_cached, completion_cache=task_completion_cache)
 
@@ -148,7 +157,18 @@ class TaskProcess(multiprocessing.Process):
         if self.task_completion_check_at_run and self.check_complete(self.task):
             logger.warning(f'{self.task} is skipped because the task is already completed.')
             return None
-        return self.task.run()
+
+        if not self.collision_lock_at_run:
+            return self.task.run()
+
+        assert self.collision_lock_redis_host is not None, 'collision_lock_redis_host must be set to use lock.'
+        assert self.collision_lock_redis_port is not None, 'collision_lock_redis_port must be set to use lock.'
+
+        # Check required tasks are not locked by others, which means they are running it.
+        check_dependency_lock(task=self.task, redis_host=self.collision_lock_redis_host, redis_port=self.collision_lock_redis_port)
+
+        # Acquire an exclusion lock while running the task to prevent collision with other jobs.
+        return run_with_lock(task=self.task, redis_host=self.collision_lock_redis_host, redis_port=self.collision_lock_redis_port)
 
     def _run_get_new_deps(self) -> Optional[List[Tuple[str, str, Dict[str, str]]]]:
         task_gen = self._run_task()
@@ -378,6 +398,10 @@ class gokart_worker(luigi.Config):
     task_completion_check_at_run: bool = ExplicitBoolParameter(
         default=True, description='If true, tasks completeness will be re-checked just before the run, in case they are finished elsewhere.'
     )
+
+    collision_lock_at_run: bool = ExplicitBoolParameter(default=False, description='If true, lock the task at run time to prevent collision with other tasks.')
+    collision_lock_redis_host: str | None = luigi.Parameter(default=None, description='Redis host for task collision lock.')
+    collision_lock_redis_port: int | None = luigi.IntParameter(default=None, description='Redis port for task collision lock.')
 
 
 class Worker:
@@ -916,6 +940,9 @@ class Worker:
             check_complete_on_run=self._config.check_complete_on_run,
             task_completion_cache=self._task_completion_cache,
             task_completion_check_at_run=self._config.task_completion_check_at_run,
+            collision_lock_at_run=self._config.collision_lock_at_run,
+            collision_lock_redis_host=self._config.collision_lock_redis_host,
+            collision_lock_redis_port=self._config.collision_lock_redis_port,
         )
 
     def _purge_children(self) -> None:

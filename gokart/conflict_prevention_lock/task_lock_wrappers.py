@@ -6,6 +6,8 @@ from gokart.conflict_prevention_lock.task_lock import TaskLockParams, set_lock_s
 
 logger = getLogger(__name__)
 
+# deprecated; task lock will be implemented to worker.py instead of each tasks
+
 
 def wrap_dump_with_lock(func: Callable, task_lock_params: TaskLockParams, exist_check: Callable):
     """Redis lock wrapper function for TargetOnKart.dump().
